@@ -5,7 +5,6 @@
 **一款专为小说作家打造的文档拆分工具 | A Document Splitter Designed for Novelists**
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.6+-green.svg)](https://www.python.org/downloads/)
 
 [English](#english) | [中文](#chinese)
 
@@ -39,31 +38,28 @@
 ### 🚀 快速开始
 
 #### 环境要求
-*   Python 3.6 或更高版本
+*   Windows 10/11 系统
+*   无需安装 Python 环境
 
 #### 安装与运行
 
-**方法一：直接运行源码**
+**方法一：下载运行（推荐）**
+1.  在本仓库的 [Releases](../../releases) 页面下载最新的 `txt_splitter.exe` 文件。
+2.  双击运行即可使用，无需安装。
+
+**方法二：运行源码（开发者）**
+如果您想修改源代码或使用 Python 运行：
 ```bash
 # 1. 克隆或下载仓库
-git clone https://github.com/zoeyzhang233666/txt-splitter.git
+git clone https://github.com/yourusername/txt-splitter.git
 cd txt-splitter
 
-# 2. 运行程序
+# 2. 安装依赖（如有需要）
+pip install -r requirements.txt
+
+# 3. 运行程序
 python txt_splitter.py
 ```
-
-**方法二：使用 PyInstaller 打包（推荐）**
-如果您不想安装 Python 环境，可以将其打包为 `.exe` 文件：
-
-```bash
-# 安装 PyInstaller
-pip install pyinstaller
-
-# 打包
-pyinstaller -F -n "TXT拆分工具" -i icon.ico txt_splitter.py
-```
-*注：请在代码目录下准备好 `icon.ico` 图标文件，或者去掉 `-i` 参数。*
 
 ### 📸 使用场景示例
 > **场景：** 您刚刚完成了一本 200 万字的网络小说，想用 AI 帮您总结全书的故事线和人物关系。
@@ -106,31 +102,28 @@ However, most AI models have context window limits and cannot process millions o
 ### 🚀 Quick Start
 
 #### Requirements
-*   Python 3.6+
+*   Windows 10/11
+*   No Python environment required
 
 #### Installation & Run
 
-**Method 1: Run Source Code**
+**Method 1: Download Executable (Recommended)**
+1.  Download the latest `txt_splitter.exe` from the [Releases](../../releases) page.
+2.  Double-click to run. No installation required.
+
+**Method 2: Run from Source (Developers)**
+If you wish to modify the code or run with Python:
 ```bash
 # 1. Clone or download the repo
 git clone https://github.com/yourusername/txt-splitter.git
 cd txt-splitter
 
-# 2. Run the app
+# 2. Install dependencies (if any)
+pip install -r requirements.txt
+
+# 3. Run the app
 python txt_splitter.py
 ```
-
-**Method 2: Package with PyInstaller (Recommended)**
-If you want a standalone `.exe` file without installing Python:
-
-```bash
-# Install PyInstaller
-pip install pyinstaller
-
-# Package
-pyinstaller -F -n "TXT Splitter" -i icon.ico txt_splitter.py
-```
-*Note: Make sure you have an `icon.ico` file in the directory, or remove the `-i` parameter.*
 
 ### 📸 Use Case Scenario
 > **Scenario:** You have just finished a 2-million-word web novel and want to use AI to summarize the story arc and character relationships.
