@@ -2,11 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 TXT文档拆分工具
-支持识别章节、选择导出、批量导出、按章节或大小分割
+支持识别章节、选择导出、批量导出、按章节或大小分割、按固定数量批量合并导出
 """
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
+from tkinter import ttk, filedialog, messagebox, scrolledtext
 import re
 import os
 import sys
@@ -74,7 +74,7 @@ class TXTSplitter:
         self.font_scale = self.settings.get('font_scale', 1.0)
         
         # 根据DPI调整窗口大小
-        base_width, base_height = 1000, 750
+        base_width, base_height = 1000, 780 
         width = int(base_width * self.dpi_scale)
         height = int(base_height * self.dpi_scale)
         self.root.geometry(f"{width}x{height}")
@@ -108,7 +108,6 @@ class TXTSplitter:
     
     def load_settings(self):
         """加载用户设置"""
-        # [修复 3] 兼容 PyInstaller 打包路径
         if getattr(sys, 'frozen', False):
             base_path = sys._MEIPASS
         else:
@@ -132,7 +131,6 @@ class TXTSplitter:
     
     def save_settings(self):
         """保存用户设置"""
-        # [修复 3] 兼容 PyInstaller 打包路径
         if getattr(sys, 'frozen', False):
             base_path = sys._MEIPASS
         else:
@@ -251,6 +249,7 @@ class TXTSplitter:
         main_frame = tk.Frame(self.root, bg=self.colors['bg'], padx=main_padx, pady=main_pady)
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
+        # --- 文件选择 ---
         file_padding = int(12 * self.dpi_scale * self.ui_scale)
         file_frame = ttk.LabelFrame(main_frame, text="文件选择", 
                                    style='Card.TLabelframe', padding=str(file_padding))
@@ -273,6 +272,7 @@ class TXTSplitter:
         ttk.Button(file_inner, text="识别章节", command=self.detect_chapters,
                   style='Primary.TButton').grid(row=0, column=2, padx=pady_val, pady=pady_val)
         
+        # --- 章节列表 ---
         chapter_frame = ttk.LabelFrame(main_frame, text="章节列表", 
                                       style='Card.TLabelframe', padding="12")
         chapter_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
@@ -313,6 +313,7 @@ class TXTSplitter:
         self.chapter_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2, pady=2)
         scrollbar.config(command=self.chapter_listbox.yview)
         
+        # --- 导出选项 ---
         export_frame = ttk.LabelFrame(main_frame, text="导出选项", 
                                      style='Card.TLabelframe', padding="12")
         export_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
@@ -320,6 +321,7 @@ class TXTSplitter:
         export_inner = ttk.Frame(export_frame, style='Card.TFrame')
         export_inner.pack(fill=tk.BOTH, expand=True)
         
+        # 1. 分割方式 (始终可见)
         split_frame = ttk.Frame(export_inner, style='Card.TFrame')
         split_frame.pack(fill=tk.X, pady=(0, 10))
         
@@ -334,45 +336,58 @@ class TXTSplitter:
         ttk.Radiobutton(split_frame, text="按大小", variable=self.split_mode, 
                        value="size", command=self.on_split_mode_changed,
                        style='Card.TRadiobutton').pack(side=tk.LEFT, padx=8)
+        ttk.Radiobutton(split_frame, text="按数量合并", variable=self.split_mode, 
+                       value="batch", command=self.on_split_mode_changed,
+                       style='Card.TRadiobutton').pack(side=tk.LEFT, padx=8)
         
-        size_frame = ttk.Frame(export_inner, style='Card.TFrame')
-        size_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(size_frame, text="文件大小", style='Card.TLabel',
+        # 2. 大小设置 (动态)
+        self.size_frame = ttk.Frame(export_inner, style='Card.TFrame')
+        ttk.Label(self.size_frame, text="文件大小", style='Card.TLabel',
                  font=('Segoe UI', label_font_size)).pack(side=tk.LEFT, padx=(0, 6))
-        self.size_entry = ttk.Entry(size_frame, width=10, style='Card.TEntry')
+        self.size_entry = ttk.Entry(self.size_frame, width=10, style='Card.TEntry')
         self.size_entry.insert(0, "100000")
         self.size_entry.pack(side=tk.LEFT, padx=3)
-        ttk.Label(size_frame, text="字符", style='Card.TLabel',
+        ttk.Label(self.size_frame, text="字符", style='Card.TLabel',
                  font=('Segoe UI', label_font_size)).pack(side=tk.LEFT, padx=(3, 0))
         
-        format_frame = ttk.Frame(export_inner, style='Card.TFrame')
-        format_frame.pack(fill=tk.X, pady=(0, 10))
+        # 3. 数量合并设置 (动态)
+        self.batch_frame = ttk.Frame(export_inner, style='Card.TFrame')
+        ttk.Label(self.batch_frame, text="每", style='Card.TLabel',
+                 font=('Segoe UI', label_font_size)).pack(side=tk.LEFT, padx=(0, 2))
+        self.batch_count_entry = ttk.Entry(self.batch_frame, width=6, style='Card.TEntry')
+        self.batch_count_entry.insert(0, "10")
+        self.batch_count_entry.pack(side=tk.LEFT, padx=2)
+        ttk.Label(self.batch_frame, text="章合并为一个文件", style='Card.TLabel',
+                 font=('Segoe UI', label_font_size)).pack(side=tk.LEFT, padx=(2, 0))
+
+        # 4. 格式设置 (始终可见，作为锚点)
+        self.format_frame = ttk.Frame(export_inner, style='Card.TFrame')
+        self.format_frame.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Label(format_frame, text="输出格式", style='Card.TLabel',
+        ttk.Label(self.format_frame, text="输出格式", style='Card.TLabel',
                  font=('Segoe UI', label_font_size)).pack(side=tk.LEFT, padx=(0, 10))
         self.output_format = tk.StringVar(value="txt")
-        ttk.Radiobutton(format_frame, text="TXT", variable=self.output_format, 
+        ttk.Radiobutton(self.format_frame, text="TXT", variable=self.output_format, 
                        value="txt", style='Card.TRadiobutton').pack(side=tk.LEFT, padx=8)
-        ttk.Radiobutton(format_frame, text="Markdown", variable=self.output_format, 
+        ttk.Radiobutton(self.format_frame, text="Markdown", variable=self.output_format, 
                        value="md", style='Card.TRadiobutton').pack(side=tk.LEFT, padx=8)
         
-        merge_frame = ttk.Frame(export_inner, style='Card.TFrame')
-        merge_frame.pack(fill=tk.X, pady=(0, 10))
-        
+        # 5. 合并选项 (动态)
+        self.merge_frame = ttk.Frame(export_inner, style='Card.TFrame')
         self.merge_export = tk.BooleanVar(value=False)
-        self.merge_check = ttk.Checkbutton(merge_frame, 
+        self.merge_check = ttk.Checkbutton(self.merge_frame, 
                                          text="合并导出到单个文件", 
                                          variable=self.merge_export,
                                          style='Card.TCheckbutton')
         self.merge_check.pack(side=tk.LEFT)
         
-        button_frame = ttk.Frame(export_inner, style='Card.TFrame')
-        button_frame.pack(fill=tk.X, pady=(6, 0))
+        # 6. 按钮组 (始终可见，作为锚点)
+        self.button_frame = ttk.Frame(export_inner, style='Card.TFrame')
+        self.button_frame.pack(fill=tk.X, pady=(6, 0))
         
-        ttk.Button(button_frame, text="导出选中", command=self.export_selected,
+        ttk.Button(self.button_frame, text="导出选中", command=self.export_selected,
                   style='Primary.TButton').pack(side=tk.LEFT, padx=4)
-        ttk.Button(button_frame, text="导出全部", command=self.export_all,
+        ttk.Button(self.button_frame, text="导出全部", command=self.export_all,
                   style='Primary.TButton').pack(side=tk.LEFT, padx=4)
         
         bottom_frame = tk.Frame(main_frame, bg=self.colors['bg'])
@@ -391,13 +406,13 @@ class TXTSplitter:
         main_frame.columnconfigure(0, weight=1)
         main_frame.rowconfigure(1, weight=1)
         
+        # 初始化时调用一次，设置正确的显示状态
         self.on_split_mode_changed()
     
     def open_settings(self):
         """打开设置窗口"""
         settings_window = tk.Toplevel(self.root)
         settings_window.title("界面设置")
-        # 简单设置大小，不随 DPI 过度缩放导致窗口过大
         settings_window.geometry("400x300") 
         settings_window.configure(bg=self.colors['bg'])
         settings_window.transient(self.root)
@@ -481,11 +496,25 @@ class TXTSplitter:
     
     def on_split_mode_changed(self):
         """分割模式改变时的回调"""
-        if self.split_mode.get() == "size":
-            self.merge_check.config(state='disabled')
-            self.merge_export.set(False)
-        else:
-            self.merge_check.config(state='normal')
+        mode = self.split_mode.get()
+        
+        # 1. 先隐藏所有动态控件
+        self.size_frame.pack_forget()
+        self.batch_frame.pack_forget()
+        self.merge_frame.pack_forget()
+        
+        # 2. 根据模式显示控件，插入到固定锚点之前
+        if mode == "batch":
+            # 批量模式：在"输出格式"之前显示"数量设置"
+            self.batch_frame.pack(fill=tk.X, pady=(0, 10), before=self.format_frame)
+            
+        elif mode == "size":
+            # 大小模式：在"输出格式"之前显示"大小设置"
+            self.size_frame.pack(fill=tk.X, pady=(0, 10), before=self.format_frame)
+            
+        elif mode == "chapter":
+            # 章节模式：在"按钮"之前显示"合并选项"
+            self.merge_frame.pack(fill=tk.X, pady=(0, 10), before=self.button_frame)
     
     def select_file(self):
         """选择TXT文件"""
@@ -605,10 +634,51 @@ class TXTSplitter:
             messagebox.showwarning("警告", "未识别到章节，请先识别章节")
             return
         
-        self._export_chapters(self.chapters)
+        split_mode = self.split_mode.get()
+        output_dir = filedialog.askdirectory(title="选择输出目录")
+        if not output_dir:
+            return
+        
+        output_format = self.output_format.get()
+        
+        try:
+            if split_mode == "chapter":
+                # 按章节模式
+                merge_export = self.merge_export.get()
+                if merge_export:
+                    self._export_merged(self.chapters, output_dir, output_format)
+                else:
+                    self._export_by_chapter(self.chapters, output_dir, output_format)
+            elif split_mode == "size":
+                # 按大小模式
+                size_limit = int(self.size_entry.get())
+                self._export_by_size(self.chapters, output_dir, output_format, size_limit)
+            elif split_mode == "batch":
+                # 批量合并模式
+                try:
+                    batch_count = int(self.batch_count_entry.get())
+                    if batch_count <= 0:
+                        raise ValueError
+                except ValueError:
+                    messagebox.showerror("错误", "合并章节数必须是大于0的整数")
+                    return
+                self._export_by_interval(self.chapters, output_dir, output_format, batch_count)
+            
+            if split_mode == "batch":
+                messagebox.showinfo("成功", f"已按每 {self.batch_count_entry.get()} 章合并导出完成！")
+                self.status_label.config(text="批量合并导出完成")
+            elif split_mode == "chapter" and self.merge_export.get():
+                 messagebox.showinfo("成功", f"已合并导出 {len(self.chapters)} 个章节")
+                 self.status_label.config(text=f"导出完成: 1 个合并文件")
+            else:
+                messagebox.showinfo("成功", f"已导出 {len(self.chapters)} 个章节")
+                self.status_label.config(text=f"导出完成: {len(self.chapters)} 个文件")
+        except Exception as e:
+            messagebox.showerror("错误", f"导出失败: {str(e)}")
+            self.status_label.config(text="导出失败")
     
     def _export_chapters(self, chapters_to_export: List[Chapter]):
-        """导出章节的内部方法"""
+        """导出章节的内部方法 (复用于手动选中)"""
         if not chapters_to_export:
             return
         
@@ -618,81 +688,23 @@ class TXTSplitter:
         
         split_mode = self.split_mode.get()
         output_format = self.output_format.get()
-        merge_export = self.merge_export.get()
-        
-        # 获取原文件名（不含后缀），用于生成新文件名
-        base_filename = "未命名文档"
-        if self.file_path:
-            base_filename = os.path.splitext(os.path.basename(self.file_path))[0]
         
         try:
+            # 仅当为普通章节模式且未勾选合并时，使用单独导出逻辑
             if split_mode == "chapter":
-                if merge_export:
-                    self._export_merged(chapters_to_export, output_dir, output_format, base_filename)
-                else:
-                    self._export_by_chapter(chapters_to_export, output_dir, output_format, base_filename)
+                self._export_by_chapter(chapters_to_export, output_dir, output_format)
             else:
-                size_limit = int(self.size_entry.get())
-                self._export_by_size(chapters_to_export, output_dir, output_format, size_limit, base_filename)
-            
-            if merge_export:
-                messagebox.showinfo("成功", f"已合并导出 {len(chapters_to_export)} 个章节到: {output_dir}")
-                self.status_label.config(text=f"导出完成: 1 个合并文件")
-            else:
-                messagebox.showinfo("成功", f"已导出 {len(chapters_to_export)} 个章节到: {output_dir}")
-                self.status_label.config(text=f"导出完成: {len(chapters_to_export)} 个文件")
+                # 其他模式（大小、批量）建议使用“导出全部”，但如果用户坚持用选中导出
+                # 这里为了简化，强制使用单章节导出
+                messagebox.showinfo("提示", "当前模式下建议使用“导出全部”功能。\n现在将按单章节导出选中项。")
+                self._export_by_chapter(chapters_to_export, output_dir, output_format)
+
+            messagebox.showinfo("成功", f"已导出 {len(chapters_to_export)} 个章节到: {output_dir}")
+            self.status_label.config(text=f"导出完成: {len(chapters_to_export)} 个文件")
         except Exception as e:
             messagebox.showerror("错误", f"导出失败: {str(e)}")
             self.status_label.config(text="导出失败")
     
-    def _ask_filename(self, initial_name: str) -> Optional[str]:
-        """
-        弹出对话框询问文件名，支持修改
-        返回用户输入的文件名，如果取消则返回 None
-        """
-        # 创建自定义对话框
-        dialog = tk.Toplevel(self.root)
-        dialog.title("输入文件名")
-        dialog.geometry("400x150")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        # 居中
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
-        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
-        dialog.geometry(f"+{x}+{y}")
-        
-        tk.Label(dialog, text="请输入导出文件的名称：", font=('Segoe UI', 10)).pack(pady=(20, 5))
-        
-        name_var = tk.StringVar(value=initial_name)
-        entry = tk.Entry(dialog, textvariable=name_var, font=('Segoe UI', 10), width=40)
-        entry.pack(pady=5)
-        entry.select_range(0, tk.END)
-        entry.focus()
-        
-        result = [None]
-        
-        def on_ok():
-            result[0] = name_var.get().strip()
-            dialog.destroy()
-        
-        def on_cancel():
-            dialog.destroy()
-        
-        btn_frame = tk.Frame(dialog)
-        btn_frame.pack(pady=20)
-        
-        tk.Button(btn_frame, text="确定", command=on_ok, width=10).pack(side=tk.LEFT, padx=10)
-        tk.Button(btn_frame, text="取消", command=on_cancel, width=10).pack(side=tk.LEFT, padx=10)
-        
-        # 绑定回车键
-        dialog.bind('<Return>', lambda event: on_ok())
-        dialog.bind('<Escape>', lambda event: on_cancel())
-        
-        self.root.wait_window(dialog)
-        return result[0]
-
     def _remove_title_from_content(self, content: str, title: str) -> str:
         """从内容开头移除章节标题（如果存在）"""
         lines = content.split('\n')
@@ -710,16 +722,10 @@ class TXTSplitter:
         
         return content
     
-    def _export_by_chapter(self, chapters: List[Chapter], output_dir: str, format_type: str, base_name: str):
+    def _export_by_chapter(self, chapters: List[Chapter], output_dir: str, format_type: str):
         """按章节导出（分别导出）"""
         for i, chapter in enumerate(chapters, 1):
             content = self.file_content[chapter.start_pos:chapter.end_pos]
-            
-            # 获取该章节在整个文档中的索引，以便生成 1~10 这样的范围
-            try:
-                global_index = self.chapters.index(chapter) + 1
-            except ValueError:
-                global_index = i
             
             if format_type == "md":
                 content = self._remove_title_from_content(content, chapter.title)
@@ -728,48 +734,14 @@ class TXTSplitter:
             else:
                 ext = ".txt"
             
-            # 生成默认文件名
             safe_title = re.sub(r'[<>:"/\\|?*]', '_', chapter.title)
-            # 限制章节标题长度，防止文件名过长
-            if len(safe_title) > 30:
-                safe_title = safe_title[:30]
-            
-            # 拼接文件名：原名 - 索引_标题
-            default_filename = f"{base_name}-{global_index:04d}_{safe_title}{ext}"
-            
-            # 询问用户修改文件名 (仅针对第一个文件弹出，后续如果全部用同一个名字逻辑会不同，这里简单处理为每次都问，或者只问第一个)
-            # 为了体验流畅，这里我们只在第一个文件时弹出询问，或者不弹直接按规则生成。
-            # 题目要求“支持修改”，这里我们弹窗让用户确认第一个文件名，
-            # 如果是批量导出，后面的文件按规律生成不再弹窗（避免点击太多次）。
-            # 特殊情况：如果只导出一个文件，则完全允许修改。
-            
-            if i == 1:
-                user_filename = self._ask_filename(default_filename)
-                if not user_filename: # 用户取消
-                    # 恢复默认名称并继续，还是直接中断？通常中断比较好
-                    # 但这里为了方便，如果取消，使用默认名
-                    final_filename = default_filename
-                else:
-                    # 确保扩展名正确
-                    if not user_filename.endswith(ext):
-                        user_filename += ext
-                    # 清理非法字符
-                    user_filename = re.sub(r'[<>:"/\\|?*]', '_', user_filename)
-                    final_filename = user_filename
-                    
-                    # 如果用户修改了主名称，我们需要记录这个前缀用于后续文件吗？
-                    # 题目举例是“制霸好莱坞-1~10”，如果是分别导出，通常是“制霸 Hollywood-0001_标题”。
-                    # 这里我们假定用户修改的是这一个特定文件的名称。
-            else:
-                # 后续文件不再弹窗，自动生成
-                final_filename = default_filename
-            
-            filepath = os.path.join(output_dir, final_filename)
+            filename = f"{i:04d}_{safe_title}{ext}"
+            filepath = os.path.join(output_dir, filename)
             
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(content)
     
-    def _export_merged(self, chapters: List[Chapter], output_dir: str, format_type: str, base_name: str):
+    def _export_merged(self, chapters: List[Chapter], output_dir: str, format_type: str):
         """合并导出到单个文件"""
         merged_content = []
         
@@ -785,36 +757,61 @@ class TXTSplitter:
         else:
             ext = ".txt"
         
-        # 获取范围索引
-        start_idx = 1
-        end_idx = len(self.chapters)
-        if chapters[0] in self.chapters:
-            start_idx = self.chapters.index(chapters[0]) + 1
-        if chapters[-1] in self.chapters:
-            end_idx = self.chapters.index(chapters[-1]) + 1
-            
-        # 生成默认文件名：原名 - 起始~结束
-        default_filename = f"{base_name}-{start_idx}~{end_idx}{ext}"
+        first_title = re.sub(r'[<>:"/\\|?*]', '_', chapters[0].title)
+        last_title = re.sub(r'[<>:"/\\|?*]', '_', chapters[-1].title)
+        filename = f"merged_{first_title}_to_{last_title}{ext}"
         
-        # 弹窗询问文件名
-        user_filename = self._ask_filename(default_filename)
-        
-        if user_filename:
-            if not user_filename.endswith(ext):
-                user_filename += ext
-            # 清理非法字符
-            user_filename = re.sub(r'[<>:"/\\|?*]', '_', user_filename)
-            filename = user_filename
-        else:
-            # 用户取消，使用默认名
-            filename = default_filename
+        if len(filename) > 200:
+            filename = f"merged_{len(chapters)}_chapters{ext}"
         
         filepath = os.path.join(output_dir, filename)
         
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(final_content)
+            
+    def _export_by_interval(self, chapters: List[Chapter], output_dir: str, format_type: str, interval: int):
+        """
+        按固定数量合并导出
+        interval: 每几章合并为一个文件
+        """
+        total_chapters = len(chapters)
+        file_index = 1
+        
+        for start_idx in range(0, total_chapters, interval):
+            # 计算结束索引（不包含）
+            end_idx = min(start_idx + interval, total_chapters)
+            
+            # 获取当前块的章节列表
+            chunk = chapters[start_idx:end_idx]
+            
+            # 准备合并内容
+            merged_content = []
+            for chapter in chunk:
+                chapter_content = self.file_content[chapter.start_pos:chapter.end_pos]
+                chapter_content = self._remove_title_from_content(chapter_content, chapter.title)
+                merged_content.append(f"# {chapter.title}\n\n{chapter_content}")
+            
+            final_content = "\n\n".join(merged_content)
+            
+            # 生成文件名
+            # 格式: Part_01_Ch1-10.txt
+            start_num = start_idx + 1
+            end_num = end_idx
+            
+            if format_type == "md":
+                ext = ".md"
+            else:
+                ext = ".txt"
+                
+            filename = f"Part_{file_index:02d}_Ch{start_num}-{end_num}{ext}"
+            filepath = os.path.join(output_dir, filename)
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(final_content)
+            
+            file_index += 1
 
-    def _export_by_size(self, chapters: List[Chapter], output_dir: str, format_type: str, size_limit: int, base_name: str):
+    def _export_by_size(self, chapters: List[Chapter], output_dir: str, format_type: str, size_limit: int):
         """按大小分割导出"""
         current_content = ""
         current_size = 0
@@ -834,15 +831,8 @@ class TXTSplitter:
             
             if chapter_size > size_limit:
                 if current_content:
-                    default_filename = f"{base_name}-part_{file_index:04d}.{format_type}"
-                    # 第一个文件弹窗询问
-                    if file_index == 1:
-                        user_input = self._ask_filename(default_filename)
-                        if user_input:
-                            if not user_input.endswith(f".{format_type}"): user_input += f".{format_type}"
-                            default_filename = re.sub(r'[<>:"/\\|?*]', '_', user_input)
-                    
-                    filepath = os.path.join(output_dir, default_filename)
+                    filename = f"part_{file_index:04d}.{format_type}"
+                    filepath = os.path.join(output_dir, filename)
                     with open(filepath, 'w', encoding='utf-8') as f:
                         f.write(current_content)
                     file_index += 1
@@ -850,24 +840,15 @@ class TXTSplitter:
                     current_size = 0
                 
                 safe_title = re.sub(r'[<>:"/\\|?*]', '_', chapter.title)
-                # 超大单章文件名：原名-part_index_标题
-                default_filename = f"{base_name}-part_{file_index:04d}_{safe_title}.{format_type}"
-                
-                filepath = os.path.join(output_dir, default_filename)
+                filename = f"part_{file_index:04d}_{safe_title}.{format_type}"
+                filepath = os.path.join(output_dir, filename)
                 with open(filepath, 'w', encoding='utf-8') as f:
                     f.write(chapter_text)
                 file_index += 1
             else:
                 if current_size + chapter_size > size_limit and current_content:
-                    default_filename = f"{base_name}-part_{file_index:04d}.{format_type}"
-                    # 第一个文件弹窗询问
-                    if file_index == 1:
-                        user_input = self._ask_filename(default_filename)
-                        if user_input:
-                            if not user_input.endswith(f".{format_type}"): user_input += f".{format_type}"
-                            default_filename = re.sub(r'[<>:"/\\|?*]', '_', user_input)
-                    
-                    filepath = os.path.join(output_dir, default_filename)
+                    filename = f"part_{file_index:04d}.{format_type}"
+                    filepath = os.path.join(output_dir, filename)
                     with open(filepath, 'w', encoding='utf-8') as f:
                         f.write(current_content)
                     file_index += 1
@@ -881,15 +862,8 @@ class TXTSplitter:
                     current_size = len(current_content)
         
         if current_content:
-            default_filename = f"{base_name}-part_{file_index:04d}.{format_type}"
-            # 第一个文件弹窗询问
-            if file_index == 1:
-                user_input = self._ask_filename(default_filename)
-                if user_input:
-                    if not user_input.endswith(f".{format_type}"): user_input += f".{format_type}"
-                    default_filename = re.sub(r'[<>:"/\\|?*]', '_', user_input)
-            
-            filepath = os.path.join(output_dir, default_filename)
+            filename = f"part_{file_index:04d}.{format_type}"
+            filepath = os.path.join(output_dir, filename)
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(current_content)
 
