@@ -62,7 +62,7 @@
 
 **方法一：下载运行（推荐）**
 
-1. 在本仓库的 [Releases](https://www.google.com/search?q=../../releases) 页面下载最新的 `文档拆分工具.exe` 文件。
+1. 在本仓库的 [Releases](https://github.com/zoeyzhang233666/txt_splitter_app/releases/tag/untagged-5891634be2c04240f0d4) 页面下载最新的 `文档拆分工具.exe` 文件。
     
 2. 双击运行即可使用，无需安装。
     
@@ -150,7 +150,7 @@ However, most AI models have context window limits. This tool solves this pain p
 
 **Method 1: Download Executable (Recommended)**
 
-1. Download the latest `txt_splitter.exe` from the [Releases](https://www.google.com/search?q=../../releases) page.
+1. Download the latest `txt_splitter.exe` from the [Releases](https://github.com/zoeyzhang233666/txt_splitter_app/releases/tag/untagged-5891634be2c04240f0d4) page.
     
 2. Double-click to run.
     
