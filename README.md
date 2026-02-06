@@ -6,7 +6,7 @@
 
 **A Professional Document Splitter for Novelists & AI Creators**
 
-[English](https://www.google.com/search?q=%23english) | [中文](https://www.google.com/search?q=%23chinese)
+[English](#english) | [中文](#chinese)
 
 </div>
 
@@ -26,25 +26,23 @@
 
 然而，大多数 AI 模型都有上下文长度限制，无法一次性“吃下”几百万字的文档。本工具完美解决了这一痛点：
 
-* **📚 智能拆分：** 自动识别“第XX章”、"Chapter" 或数字序号标题，将长书按章节切分。
-* **🤖 AI 友好：** 拆分后的文件方便作家分批上传给 AI，快速生成**全书剧情大纲**或**分章摘要**。
-* **📂 灵活的导出选项**：
-* **按章节导出**：每章生成一个独立文件。
-* **按大小导出**：根据 MB 阈值自动切割，适合上传有字数限制的平台。
-* **合并导出**：将选中的多个章节合并为一个文件（例如 `小说名-合并导出.txt`）。
-* **批量等量合并**：每 N 章节合并导出，文件名会自动生成如 `1~10章` 的区间标识。
-
-
-* **🏷️ 文件命名方式**：支持自定义“原文件名、序号、章节名”的组合。系统会自动过滤文件名中的非法字符以确保兼容性。
-* **📚 电子书多格式支持**：除了 **纯文本 (TXT)**，还支持直接读取 **Epub** 和 **Mobi** 格式，支持导出为 **纯文本 (TXT)** 或 **Markdown (MD)** 格式。
-* **🛠️ 编码自动识别**：深度适配中文环境，自动识别 UTF-8, GB18030, GBK 等文本编码，拒绝乱码。
+- **📚 智能拆分：** 自动识别“第XX章”、"Chapter" 或数字序号标题，将长书按章节切分。
+- **🤖 AI 友好：** 拆分后的文件方便作家分批上传给 AI，快速生成**全书剧情大纲**或**分章摘要**。
+- **📂 灵活的导出选项**：
+    - **按章节导出**：每章生成一个独立文件。
+    - **按大小导出**：根据 MB 阈值自动切割，适合上传有字数限制的平台。
+    - **合并导出**：将选中的多个章节合并为一个文件（例如 `小说名-合并导出.txt`）。
+    - **批量等量合并**：每 N 章节合并导出，文件名会自动生成如 `1~10章` 的区间标识。
+- **🏷️ 文件命名方式**：支持自定义“原文件名、序号、章节名”的组合。系统会自动过滤文件名中的非法字符以确保兼容性。
+- **📚 电子书多格式支持**：除了 **纯文本 (TXT)**，还支持直接读取 **Epub** 和 **Mobi** 格式，支持导出为 **纯文本 (TXT)** 或 **Markdown (MD)** 格式。
+- **🛠️ 编码自动识别**：深度适配中文环境，自动识别 UTF-8, GB18030, GBK 等文本编码，拒绝乱码。
 
 ### 🚀 快速开始
 
 #### 环境要求
 
-* Windows 10/11 系统
-* 无需安装 Python 环境（使用 Release 版本）
+- Windows 10/11 系统
+- 无需安装 Python 环境（使用 Release 版本）
 
 #### 安装与运行
 
@@ -59,7 +57,7 @@
 
 ```bash
 # 1. 克隆或下载仓库
-git clone https://github.com/zoeyzhang233666/txt_splitter_app.git
+git clone [https://github.com/zoeyzhang233666/txt_splitter_app.git](https://github.com/zoeyzhang233666/txt_splitter_app.git)
 cd txt_splitter_app
 
 # 2. 安装依赖
@@ -116,7 +114,7 @@ However, most AI models have context window limits. This tool solves this pain p
 **Method 2: Run from Source**
 
 ```bash
-git clone https://github.com/zoeyzhang233666/txt_splitter_app.git
+git clone [https://github.com/zoeyzhang233666/txt_splitter_app.git](https://github.com/zoeyzhang233666/txt_splitter_app.git)
 cd txt_splitter_app
 pip install ebooklib beautifulsoup4 mobi
 python txt_splitter.py
