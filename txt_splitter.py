@@ -1,879 +1,285 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-TXT文档拆分工具
-支持识别章节、选择导出、批量导出、按章节或大小分割、按固定数量批量合并导出
-"""
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
+from tkinter import ttk, filedialog, messagebox
 import re
 import os
-import sys
-import json
-from pathlib import Path
-from typing import List, Tuple, Optional
 
-# --- DPI 设置开始 (解决 4K 屏模糊) ---
+# --- 电子书支持 ---
+try:
+    from ebooklib import epub
+    from bs4 import BeautifulSoup
+    import mobi
+    EBOOK_SUPPORT = True
+except ImportError:
+    EBOOK_SUPPORT = False
+
+# --- DPI 适配 ---
 try:
     from ctypes import windll
-    # 设置进程为 Per-Monitor DPI 感知 (Windows 10/11 4K 屏必备)
-    # 必须在 root = tk.Tk() 之前生效
     windll.shcore.SetProcessDpiAwareness(1)
 except Exception:
-    try:
-        windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
-# --- DPI 设置结束 ---
-
+    pass
 
 class Chapter:
-    """章节类"""
     def __init__(self, title: str, start_pos: int, end_pos: int = None):
         self.title = title.strip()
         self.start_pos = start_pos
         self.end_pos = end_pos
-    
-    def __repr__(self):
-        return f"Chapter('{self.title}', {self.start_pos}, {self.end_pos})"
 
+class ScrollableCheckBoxFrame(tk.Frame):
+    """自定义滚动勾选列表组件"""
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+        self.canvas = tk.Canvas(self, bg="white", highlightthickness=0)
+        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = tk.Frame(self.canvas, bg="white")
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+
+    def _on_mousewheel(self, event):
+        self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+    def clear(self):
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
 
 class TXTSplitter:
-    """TXT文档拆分器主类"""
-    
     def __init__(self, root):
         self.root = root
-        self.root.title("TXT文档拆分工具")
+        self.root.title("文档拆分工具 - 加强版")
+        self.root.geometry("1100x900")
         
-        # [修复 1] 必须先加载设置
-        self.settings = self.load_settings()
-        
-        # [修复 2] 优化 DPI 缩放逻辑
-        self.dpi_scale = 1.0 # 默认值
-        if sys.platform == 'win32':
-            try:
-                from ctypes import windll
-                try:
-                    hdc = windll.user32.GetDC(0)
-                    logical_dpi = windll.gdi32.GetDeviceCaps(hdc, 88) # LOGPIXELSX
-                    windll.user32.ReleaseDC(0, hdc)
-                    calc_scale = logical_dpi / 96.0
-                    # 限制范围防止计算错误导致界面过大
-                    if 0.8 < calc_scale < 3.0:
-                        self.dpi_scale = calc_scale
-                    else:
-                        self.dpi_scale = 1.0
-                except:
-                    self.dpi_scale = 1.0
-            except:
-                self.dpi_scale = 1.0
-        
-        # 应用用户设置的UI缩放
-        self.ui_scale = self.settings.get('ui_scale', 1.0)
-        self.font_scale = self.settings.get('font_scale', 1.0)
-        
-        # 根据DPI调整窗口大小
-        base_width, base_height = 1000, 780 
-        width = int(base_width * self.dpi_scale)
-        height = int(base_height * self.dpi_scale)
-        self.root.geometry(f"{width}x{height}")
-        
-        # 设置最小窗口大小
-        self.root.minsize(int(800 * self.dpi_scale), int(600 * self.dpi_scale))
-        
-        # 现代简约配色
-        self.colors = {
-            'bg': '#FAFAFA',
-            'fg': '#2C2C2E',
-            'frame_bg': '#FFFFFF',
-            'accent': '#007AFF',
-            'accent_hover': '#0051D5',
-            'border': '#E5E5EA',
-            'selected': '#E3F2FD',
-            'button_bg': '#007AFF',
-            'button_fg': '#FFFFFF',
-            'secondary_bg': '#F2F2F7',
-        }
-        
-        self.root.configure(bg=self.colors['bg'])
-        
-        self.file_path = None
+        self.file_path = ""
+        self.file_name_stem = ""
         self.file_content = ""
-        self.chapters: List[Chapter] = []
-        self.selected_chapters = []
-        
-        self.setup_styles()
-        self.setup_ui()
-    
-    def load_settings(self):
-        """加载用户设置"""
-        if getattr(sys, 'frozen', False):
-            base_path = sys._MEIPASS
-        else:
-            base_path = os.path.dirname(__file__)
-        
-        settings_file = os.path.join(base_path, 'settings.json')
-        default_settings = {
-            'font_scale': 1.0,
-            'ui_scale': 1.0
-        }
-        
-        if os.path.exists(settings_file):
-            try:
-                with open(settings_file, 'r', encoding='utf-8') as f:
-                    user_settings = json.load(f)
-                    default_settings.update(user_settings)
-            except:
-                pass
-        
-        return default_settings
-    
-    def save_settings(self):
-        """保存用户设置"""
-        if getattr(sys, 'frozen', False):
-            base_path = sys._MEIPASS
-        else:
-            base_path = os.path.dirname(__file__)
-            
-        settings_file = os.path.join(base_path, 'settings.json')
-        try:
-            with open(settings_file, 'w', encoding='utf-8') as f:
-                json.dump(self.settings, f, indent=2, ensure_ascii=False)
-        except:
-            pass
-    
-    def setup_styles(self):
-        """设置苹果风格的样式"""
-        style = ttk.Style()
-        try:
-            style.theme_use('clam')
-        except:
-            pass
-        
-        # 字体大小计算
-        base_font_size = 8
-        title_font_size = 9
-        small_font_size = 7
-        font_size = max(8, int(base_font_size * self.dpi_scale * self.font_scale))
-        title_size = max(9, int(title_font_size * self.dpi_scale * self.font_scale))
-        small_size = max(7, int(small_font_size * self.dpi_scale * self.font_scale))
-        
-        # Padding 计算
-        base_padding = 12
-        base_padding_small = 6
-        padding = int(base_padding * self.dpi_scale * self.ui_scale)
-        padding_small = int(base_padding_small * self.dpi_scale * self.ui_scale)
-        
-        # 配置Frame样式
-        style.configure('Card.TFrame', 
-                       background=self.colors['frame_bg'],
-                       relief='flat',
-                       borderwidth=0)
-        
-        style.configure('Card.TLabelframe',
-                       background=self.colors['frame_bg'],
-                       foreground=self.colors['fg'],
-                       borderwidth=1,
-                       relief='flat',
-                       bordercolor=self.colors['border'])
-        
-        style.configure('Card.TLabelframe.Label',
-                       background=self.colors['frame_bg'],
-                       foreground=self.colors['fg'],
-                       font=('Segoe UI', title_size))
-        
-        style.configure('Card.TLabel',
-                      background=self.colors['frame_bg'],
-                      foreground=self.colors['fg'],
-                      font=('Segoe UI', font_size))
-        
-        style.configure('Primary.TButton',
-                      background=self.colors['button_bg'],
-                      foreground=self.colors['button_fg'],
-                      borderwidth=0,
-                      focuscolor='none',
-                      font=('Segoe UI', font_size),
-                      padding=(int(10 * self.dpi_scale * self.ui_scale), 
-                              int(4 * self.dpi_scale * self.ui_scale)))
-        
-        style.map('Primary.TButton',
-                 background=[('active', self.colors['accent_hover']),
-                           ('pressed', self.colors['accent_hover'])])
-        
-        style.configure('Secondary.TButton',
-                       background=self.colors['secondary_bg'],
-                       foreground=self.colors['fg'],
-                       borderwidth=0,
-                       focuscolor='none',
-                       font=('Segoe UI', font_size),
-                       padding=(int(8 * self.dpi_scale * self.ui_scale), 
-                               int(4 * self.dpi_scale * self.ui_scale)))
-        
-        style.map('Secondary.TButton',
-                 background=[('active', '#E5E5EA'),
-                           ('pressed', '#D1D1D6')])
-        
-        style.configure('Card.TEntry',
-                       fieldbackground=self.colors['frame_bg'],
-                       foreground=self.colors['fg'],
-                       borderwidth=1,
-                       relief='flat',
-                       bordercolor=self.colors['border'],
-                       padding=int(4 * self.dpi_scale * self.ui_scale),
-                       font=('Segoe UI', font_size))
-        
-        style.configure('Card.TRadiobutton',
-                      background=self.colors['frame_bg'],
-                      foreground=self.colors['fg'],
-                      font=('Segoe UI', font_size),
-                      focuscolor='none')
-        
-        style.configure('Card.TCheckbutton',
-                       background=self.colors['frame_bg'],
-                       foreground=self.colors['fg'],
-                       font=('Segoe UI', font_size),
-                       focuscolor='none')
-        
-        style.configure('Status.TLabel',
-                      background=self.colors['secondary_bg'],
-                      foreground=self.colors['fg'],
-                      font=('Segoe UI', small_size),
-                      padding=int(4 * self.dpi_scale),
-                      relief='flat')
-    
-    def setup_ui(self):
-        """设置用户界面"""
-        main_padx = int(12 * self.dpi_scale * self.ui_scale)
-        main_pady = int(12 * self.dpi_scale * self.ui_scale)
-        main_frame = tk.Frame(self.root, bg=self.colors['bg'], padx=main_padx, pady=main_pady)
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # --- 文件选择 ---
-        file_padding = int(12 * self.dpi_scale * self.ui_scale)
-        file_frame = ttk.LabelFrame(main_frame, text="文件选择", 
-                                   style='Card.TLabelframe', padding=str(file_padding))
-        file_pady = int(10 * self.dpi_scale * self.ui_scale)
-        file_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, file_pady))
-        
-        file_inner = ttk.Frame(file_frame, style='Card.TFrame')
-        file_inner.pack(fill=tk.BOTH, expand=True)
-        
-        font_size = max(8, int(8 * self.dpi_scale * self.font_scale))
-        self.file_label = ttk.Label(file_inner, text="未选择文件", 
-                                   style='Card.TLabel', font=('Segoe UI', font_size))
-        pad_val = int(10 * self.dpi_scale * self.ui_scale)
-        pady_val = int(3 * self.dpi_scale * self.ui_scale)
-        self.file_label.grid(row=0, column=0, sticky=tk.W, padx=(0, pad_val), pady=pady_val)
-        
-        ttk.Button(file_inner, text="选择文件", command=self.select_file,
-                  style='Primary.TButton').grid(row=0, column=1, padx=pady_val, pady=pady_val)
-        
-        ttk.Button(file_inner, text="识别章节", command=self.detect_chapters,
-                  style='Primary.TButton').grid(row=0, column=2, padx=pady_val, pady=pady_val)
-        
-        # --- 章节列表 ---
-        chapter_frame = ttk.LabelFrame(main_frame, text="章节列表", 
-                                      style='Card.TLabelframe', padding="12")
-        chapter_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
-        
-        chapter_inner = ttk.Frame(chapter_frame, style='Card.TFrame')
-        chapter_inner.pack(fill=tk.BOTH, expand=True)
-        
-        btn_frame = ttk.Frame(chapter_inner, style='Card.TFrame')
-        btn_frame.pack(fill=tk.X, pady=(0, 6))
-        
-        ttk.Button(btn_frame, text="全选", command=self.select_all,
-                  style='Secondary.TButton').pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="全不选", command=self.deselect_all,
-                  style='Secondary.TButton').pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="反选", command=self.invert_selection,
-                  style='Secondary.TButton').pack(side=tk.LEFT, padx=2)
-        
-        list_frame = tk.Frame(chapter_inner, bg=self.colors['frame_bg'], 
-                             highlightbackground=self.colors['border'],
-                             highlightthickness=1)
-        list_frame.pack(fill=tk.BOTH, expand=True)
-        
-        scrollbar = ttk.Scrollbar(list_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 2), pady=2)
-        
-        listbox_font_size = max(8, int(8 * self.dpi_scale * self.font_scale))
-        self.chapter_listbox = tk.Listbox(list_frame, selectmode=tk.EXTENDED, 
-                                          yscrollcommand=scrollbar.set,
-                                          height=15,
-                                          bg=self.colors['frame_bg'],
-                                          fg=self.colors['fg'],
-                                          selectbackground=self.colors['accent'],
-                                          selectforeground='#FFFFFF',
-                                          borderwidth=0,
-                                          highlightthickness=0,
-                                          font=('Segoe UI', listbox_font_size),
-                                          activestyle='none')
-        self.chapter_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2, pady=2)
-        scrollbar.config(command=self.chapter_listbox.yview)
-        
-        # --- 导出选项 ---
-        export_frame = ttk.LabelFrame(main_frame, text="导出选项", 
-                                     style='Card.TLabelframe', padding="12")
-        export_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        
-        export_inner = ttk.Frame(export_frame, style='Card.TFrame')
-        export_inner.pack(fill=tk.BOTH, expand=True)
-        
-        # 1. 分割方式 (始终可见)
-        split_frame = ttk.Frame(export_inner, style='Card.TFrame')
-        split_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        label_font_size = max(8, int(8 * self.dpi_scale * self.font_scale))
-        ttk.Label(split_frame, text="分割方式", style='Card.TLabel',
-                 font=('Segoe UI', label_font_size)).pack(side=tk.LEFT, padx=(0, 10))
-        
-        self.split_mode = tk.StringVar(value="chapter")
-        ttk.Radiobutton(split_frame, text="按章节", variable=self.split_mode, 
-                       value="chapter", command=self.on_split_mode_changed,
-                       style='Card.TRadiobutton').pack(side=tk.LEFT, padx=8)
-        ttk.Radiobutton(split_frame, text="按大小", variable=self.split_mode, 
-                       value="size", command=self.on_split_mode_changed,
-                       style='Card.TRadiobutton').pack(side=tk.LEFT, padx=8)
-        ttk.Radiobutton(split_frame, text="按数量合并", variable=self.split_mode, 
-                       value="batch", command=self.on_split_mode_changed,
-                       style='Card.TRadiobutton').pack(side=tk.LEFT, padx=8)
-        
-        # 2. 大小设置 (动态)
-        self.size_frame = ttk.Frame(export_inner, style='Card.TFrame')
-        ttk.Label(self.size_frame, text="文件大小", style='Card.TLabel',
-                 font=('Segoe UI', label_font_size)).pack(side=tk.LEFT, padx=(0, 6))
-        self.size_entry = ttk.Entry(self.size_frame, width=10, style='Card.TEntry')
-        self.size_entry.insert(0, "100000")
-        self.size_entry.pack(side=tk.LEFT, padx=3)
-        ttk.Label(self.size_frame, text="字符", style='Card.TLabel',
-                 font=('Segoe UI', label_font_size)).pack(side=tk.LEFT, padx=(3, 0))
-        
-        # 3. 数量合并设置 (动态)
-        self.batch_frame = ttk.Frame(export_inner, style='Card.TFrame')
-        ttk.Label(self.batch_frame, text="每", style='Card.TLabel',
-                 font=('Segoe UI', label_font_size)).pack(side=tk.LEFT, padx=(0, 2))
-        self.batch_count_entry = ttk.Entry(self.batch_frame, width=6, style='Card.TEntry')
-        self.batch_count_entry.insert(0, "10")
-        self.batch_count_entry.pack(side=tk.LEFT, padx=2)
-        ttk.Label(self.batch_frame, text="章合并为一个文件", style='Card.TLabel',
-                 font=('Segoe UI', label_font_size)).pack(side=tk.LEFT, padx=(2, 0))
-
-        # 4. 格式设置 (始终可见，作为锚点)
-        self.format_frame = ttk.Frame(export_inner, style='Card.TFrame')
-        self.format_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(self.format_frame, text="输出格式", style='Card.TLabel',
-                 font=('Segoe UI', label_font_size)).pack(side=tk.LEFT, padx=(0, 10))
-        self.output_format = tk.StringVar(value="txt")
-        ttk.Radiobutton(self.format_frame, text="TXT", variable=self.output_format, 
-                       value="txt", style='Card.TRadiobutton').pack(side=tk.LEFT, padx=8)
-        ttk.Radiobutton(self.format_frame, text="Markdown", variable=self.output_format, 
-                       value="md", style='Card.TRadiobutton').pack(side=tk.LEFT, padx=8)
-        
-        # 5. 合并选项 (动态)
-        self.merge_frame = ttk.Frame(export_inner, style='Card.TFrame')
-        self.merge_export = tk.BooleanVar(value=False)
-        self.merge_check = ttk.Checkbutton(self.merge_frame, 
-                                         text="合并导出到单个文件", 
-                                         variable=self.merge_export,
-                                         style='Card.TCheckbutton')
-        self.merge_check.pack(side=tk.LEFT)
-        
-        # 6. 按钮组 (始终可见，作为锚点)
-        self.button_frame = ttk.Frame(export_inner, style='Card.TFrame')
-        self.button_frame.pack(fill=tk.X, pady=(6, 0))
-        
-        ttk.Button(self.button_frame, text="导出选中", command=self.export_selected,
-                  style='Primary.TButton').pack(side=tk.LEFT, padx=4)
-        ttk.Button(self.button_frame, text="导出全部", command=self.export_all,
-                  style='Primary.TButton').pack(side=tk.LEFT, padx=4)
-        
-        bottom_frame = tk.Frame(main_frame, bg=self.colors['bg'])
-        bottom_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 0))
-        
-        settings_btn = ttk.Button(bottom_frame, text="⚙ 设置", 
-                                 command=self.open_settings,
-                                 style='Secondary.TButton')
-        settings_btn.pack(side=tk.LEFT, padx=(0, 10))
-        
-        self.status_label = ttk.Label(bottom_frame, text="就绪", style='Status.TLabel')
-        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(1, weight=1)
-        
-        # 初始化时调用一次，设置正确的显示状态
-        self.on_split_mode_changed()
-    
-    def open_settings(self):
-        """打开设置窗口"""
-        settings_window = tk.Toplevel(self.root)
-        settings_window.title("界面设置")
-        settings_window.geometry("400x300") 
-        settings_window.configure(bg=self.colors['bg'])
-        settings_window.transient(self.root)
-        settings_window.grab_set()
-        
-        # 居中显示
-        settings_window.update_idletasks()
-        x = (settings_window.winfo_screenwidth() // 2) - (settings_window.winfo_width() // 2)
-        y = (settings_window.winfo_screenheight() // 2) - (settings_window.winfo_height() // 2)
-        settings_window.geometry(f"+{x}+{y}")
-        
-        main_frame = tk.Frame(settings_window, bg=self.colors['bg'], padx=20, pady=20)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        font_frame = ttk.LabelFrame(main_frame, text="字体大小", 
-                                   style='Card.TLabelframe', padding="15")
-        font_frame.pack(fill=tk.X, pady=(0, 15))
-        
-        font_inner = ttk.Frame(font_frame, style='Card.TFrame')
-        font_inner.pack(fill=tk.X)
-        
-        ttk.Label(font_inner, text="字体缩放:", style='Card.TLabel').pack(side=tk.LEFT, padx=(0, 10))
-        
-        font_scale_var = tk.DoubleVar(value=self.font_scale)
-        font_scale_scale = ttk.Scale(font_inner, from_=0.7, to=1.5, 
-                                    variable=font_scale_var, orient=tk.HORIZONTAL, length=200)
-        font_scale_scale.pack(side=tk.LEFT, padx=10)
-        
-        font_value_label = ttk.Label(font_inner, text=f"{self.font_scale:.2f}", 
-                                     style='Card.TLabel', width=5)
-        font_value_label.pack(side=tk.LEFT, padx=5)
-        
-        def update_font_value(val):
-            font_value_label.config(text=f"{float(val):.2f}")
-        
-        font_scale_scale.config(command=update_font_value)
-        
-        ui_frame = ttk.LabelFrame(main_frame, text="界面大小", 
-                                 style='Card.TLabelframe', padding="15")
-        ui_frame.pack(fill=tk.X, pady=(0, 15))
-        
-        ui_inner = ttk.Frame(ui_frame, style='Card.TFrame')
-        ui_inner.pack(fill=tk.X)
-        
-        ttk.Label(ui_inner, text="界面缩放:", style='Card.TLabel').pack(side=tk.LEFT, padx=(0, 10))
-        
-        ui_scale_var = tk.DoubleVar(value=self.ui_scale)
-        ui_scale_scale = ttk.Scale(ui_inner, from_=0.8, to=1.5, 
-                                   variable=ui_scale_var, orient=tk.HORIZONTAL, length=200)
-        ui_scale_scale.pack(side=tk.LEFT, padx=10)
-        
-        ui_value_label = ttk.Label(ui_inner, text=f"{self.ui_scale:.2f}", 
-                                  style='Card.TLabel', width=5)
-        ui_value_label.pack(side=tk.LEFT, padx=5)
-        
-        def update_ui_value(val):
-            ui_value_label.config(text=f"{float(val):.2f}")
-        
-        ui_scale_scale.config(command=update_ui_value)
-        
-        info_label = ttk.Label(main_frame, 
-                              text="提示：修改设置后需要重启程序才能生效",
-                              style='Card.TLabel',
-                              foreground='#666666')
-        info_label.pack(pady=10)
-        
-        btn_frame = ttk.Frame(main_frame, style='Card.TFrame')
-        btn_frame.pack(fill=tk.X, pady=(10, 0))
-        
-        def save_and_close():
-            self.settings['font_scale'] = font_scale_var.get()
-            self.settings['ui_scale'] = ui_scale_var.get()
-            self.save_settings()
-            messagebox.showinfo("设置已保存", "设置已保存！请重启程序使设置生效。")
-            settings_window.destroy()
-        
-        ttk.Button(btn_frame, text="保存", command=save_and_close,
-                  style='Primary.TButton').pack(side=tk.RIGHT, padx=5)
-        ttk.Button(btn_frame, text="取消", command=settings_window.destroy,
-                  style='Secondary.TButton').pack(side=tk.RIGHT, padx=5)
-    
-    def on_split_mode_changed(self):
-        """分割模式改变时的回调"""
-        mode = self.split_mode.get()
-        
-        # 1. 先隐藏所有动态控件
-        self.size_frame.pack_forget()
-        self.batch_frame.pack_forget()
-        self.merge_frame.pack_forget()
-        
-        # 2. 根据模式显示控件，插入到固定锚点之前
-        if mode == "batch":
-            # 批量模式：在"输出格式"之前显示"数量设置"
-            self.batch_frame.pack(fill=tk.X, pady=(0, 10), before=self.format_frame)
-            
-        elif mode == "size":
-            # 大小模式：在"输出格式"之前显示"大小设置"
-            self.size_frame.pack(fill=tk.X, pady=(0, 10), before=self.format_frame)
-            
-        elif mode == "chapter":
-            # 章节模式：在"按钮"之前显示"合并选项"
-            self.merge_frame.pack(fill=tk.X, pady=(0, 10), before=self.button_frame)
-    
-    def select_file(self):
-        """选择TXT文件"""
-        file_path = filedialog.askopenfilename(
-            title="选择TXT文件",
-            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")]
-        )
-        if file_path:
-            self.file_path = file_path
-            self.file_label.config(text=f"已选择: {os.path.basename(file_path)}")
-            try:
-                encodings = ['utf-8', 'gbk', 'gb2312', 'gb18030', 'big5']
-                for encoding in encodings:
-                    try:
-                        with open(file_path, 'r', encoding=encoding) as f:
-                            self.file_content = f.read()
-                        self.status_label.config(text=f"文件加载成功 (编码: {encoding})")
-                        break
-                    except UnicodeDecodeError:
-                        continue
-                else:
-                    messagebox.showerror("错误", "无法读取文件，编码不支持")
-            except Exception as e:
-                messagebox.showerror("错误", f"读取文件失败: {str(e)}")
-    
-    def detect_chapters(self):
-        """识别章节"""
-        if not self.file_content:
-            messagebox.showwarning("警告", "请先选择文件")
-            return
-        
         self.chapters = []
+        self.check_vars = [] 
+
+        # 配置变量
+        self.use_file_prefix = tk.BooleanVar(value=True)
+        self.use_index_prefix = tk.BooleanVar(value=False)
+        self.split_size_mb = tk.StringVar(value="1.0")
+        self.merge_count = tk.StringVar(value="10")
+        self.output_ext = tk.StringVar(value="txt")
         
-        patterns = [
-            r'^第\s*[一二三四五六七八九十百千万\d]+\s*章[^\n]*',
-            r'^第\s*[一二三四五六七八九十百千万\d]+\s*节[^\n]*',
-            r'^第[一二三四五六七八九十百千万\d]+章[^\n]*',
-            r'^第[一二三四五六七八九十百千万\d]+节[^\n]*',
-            r'^Chapter\s+\d+[^\n]*',
-            r'^CHAPTER\s+\d+[^\n]*',
-            r'^第[一二三四五六七八九十百千万\d]+回[^\n]*',
-            r'^第\s*[一二三四五六七八九十百千万\d]+\s*回[^\n]*',
-            r'^第[一二三四五六七八九十百千万\d]+集[^\n]*',
-            r'^第\s*[一二三四五六七八九十百千万\d]+\s*集[^\n]*',
-            r'^\d+[\.、]\s*[^\n]*',
-            r'^【第[一二三四五六七八九十百千万\d]+章】[^\n]*',
-            r'^【第\s*[一二三四五六七八九十百千万\d]+\s*章】[^\n]*',
-            r'^【第[一二三四五六七八九十百千万\d]+节】[^\n]*',
-            r'^【第\s*[一二三四五六七八九十百千万\d]+\s*节】[^\n]*',
-        ]
+        self.setup_ui()
+
+    def setup_ui(self):
+        self.root.configure(bg='#F8F9FA')
+        main_frame = tk.Frame(self.root, bg='#F8F9FA', padx=20, pady=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 1. 文件加载
+        f_frame = ttk.LabelFrame(main_frame, text=" 1. 文件加载 ", padding=10)
+        f_frame.pack(fill=tk.X, pady=5)
+        self.file_label = ttk.Label(f_frame, text="支持格式: TXT, Epub, Mobi")
+        self.file_label.pack(side=tk.LEFT, padx=5)
+        ttk.Button(f_frame, text="打开文件", command=self.load_file).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(f_frame, text="识别章节", command=self.detect_chapters).pack(side=tk.RIGHT, padx=5)
+
+        # 2. 章节预览
+        l_frame = ttk.LabelFrame(main_frame, text=" 2. 章节列表 ", padding=10)
+        l_frame.pack(fill=tk.BOTH, expand=True, pady=5)
         
-        lines = self.file_content.split('\n')
-        current_pos = 0
+        btn_bar = tk.Frame(l_frame, bg='white')
+        btn_bar.pack(fill=tk.X)
+        ttk.Button(btn_bar, text="全选", command=self.select_all).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_bar, text="反选", command=self.invert_selection).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_bar, text="清空", command=self.select_none).pack(side=tk.LEFT, padx=2)
+
+        self.chapter_area = ScrollableCheckBoxFrame(l_frame)
+        self.chapter_area.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # 3. 命名规则
+        n_frame = ttk.LabelFrame(main_frame, text=" 3. 命名与格式设置 ", padding=10)
+        n_frame.pack(fill=tk.X, pady=5)
+        tk.Checkbutton(n_frame, text="包含原文件名", variable=self.use_file_prefix, bg='#F8F9FA').pack(side=tk.LEFT, padx=10)
+        tk.Checkbutton(n_frame, text="包含序号 (0001_)", variable=self.use_index_prefix, bg='#F8F9FA').pack(side=tk.LEFT, padx=10)
         
-        for i, line in enumerate(lines):
-            line_stripped = line.strip()
-            if not line_stripped:
-                current_pos += len(line) + 1
-                continue
-            
-            for pattern in patterns:
-                if re.match(pattern, line_stripped):
-                    chapter = Chapter(line_stripped, current_pos)
-                    self.chapters.append(chapter)
-                    break
-            
-            current_pos += len(line) + 1
-        
+        ttk.Separator(n_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=15)
+        ttk.Label(n_frame, text="导出后缀:").pack(side=tk.LEFT)
+        ttk.Radiobutton(n_frame, text="TXT", variable=self.output_ext, value="txt").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(n_frame, text="Markdown", variable=self.output_ext, value="md").pack(side=tk.LEFT, padx=5)
+
+        # 4. 导出动作
+        e_frame = ttk.LabelFrame(main_frame, text=" 4. 导出模式 ", padding=10)
+        e_frame.pack(fill=tk.X, pady=5)
+
+        row1 = tk.Frame(e_frame); row1.pack(fill=tk.X, pady=2)
+        ttk.Button(row1, text="导出勾选项：一章一档", command=self.export_individual).pack(side=tk.LEFT, padx=5)
+        ttk.Button(row1, text="导出勾选项：合并为单档", command=self.export_merged_single).pack(side=tk.LEFT, padx=5)
+
+        row2 = tk.Frame(e_frame); row2.pack(fill=tk.X, pady=2)
+        ttk.Label(row2, text="按大小分割 (MB):").pack(side=tk.LEFT)
+        ttk.Entry(row2, textvariable=self.split_size_mb, width=6).pack(side=tk.LEFT, padx=5)
+        ttk.Button(row2, text="执行分割导出", command=self.export_by_size).pack(side=tk.LEFT, padx=5)
+
+        row3 = tk.Frame(e_frame); row3.pack(fill=tk.X, pady=2)
+        ttk.Label(row3, text="每 ").pack(side=tk.LEFT)
+        ttk.Entry(row3, textvariable=self.merge_count, width=6).pack(side=tk.LEFT, padx=2)
+        ttk.Label(row3, text=" 章节合并导出").pack(side=tk.LEFT)
+        ttk.Button(row3, text="执行批量合并", command=self.export_by_count).pack(side=tk.LEFT, padx=5)
+
+    # --- 逻辑实现 ---
+
+    def load_file(self):
+        path = filedialog.askopenfilename(filetypes=[("支持格式", "*.txt;*.epub;*.mobi")])
+        if not path: return
+        self.file_path = path
+        self.file_name_stem = os.path.splitext(os.path.basename(path))[0]
+        ext = os.path.splitext(path)[1].lower()
+        try:
+            if ext == ".txt":
+                for enc in ['utf-8-sig', 'gb18030', 'gbk']:
+                    try:
+                        with open(path, 'r', encoding=enc) as f: self.file_content = f.read(); break
+                    except: continue
+            elif ext == ".epub" and EBOOK_SUPPORT:
+                book = epub.read_epub(path)
+                self.file_content = "\n\n".join([BeautifulSoup(i.get_content(), 'html.parser').get_text() for i in book.get_items() if i.get_type()==9])
+            elif ext == ".mobi" and EBOOK_SUPPORT:
+                _, res_path = mobi.extract(path)
+                with open(res_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    self.file_content = BeautifulSoup(f.read(), 'html.parser').get_text()
+            self.file_label.config(text=f"已载入: {os.path.basename(path)}")
+        except Exception as e: messagebox.showerror("错误", str(e))
+
+    def detect_chapters(self):
+        if not self.file_content: return
+        patterns = [r'^\s*第\s*[一二三四五六七八九十百千万\d]+\s*[章节回集].*$', r'^\s*Chapter\s+\d+.*$', r'^\s*\d+[\.、\s].*$']
+        regex = re.compile('|'.join(patterns), re.MULTILINE)
+        self.chapters = [Chapter(m.group(), m.start()) for m in regex.finditer(self.file_content)]
         for i in range(len(self.chapters)):
-            if i < len(self.chapters) - 1:
-                self.chapters[i].end_pos = self.chapters[i + 1].start_pos
-            else:
-                self.chapters[i].end_pos = len(self.file_content)
-        
-        self.chapter_listbox.delete(0, tk.END)
-        for chapter in self.chapters:
-            self.chapter_listbox.insert(tk.END, chapter.title)
-        
-        self.status_label.config(text=f"识别到 {len(self.chapters)} 个章节")
-        
-        if len(self.chapters) == 0:
-            messagebox.showinfo("提示", "未识别到章节，您可以手动选择内容进行导出")
-    
-    def select_all(self):
-        """全选章节"""
-        self.chapter_listbox.selection_set(0, tk.END)
-    
-    def deselect_all(self):
-        """全不选"""
-        self.chapter_listbox.selection_clear(0, tk.END)
-    
-    def invert_selection(self):
-        """反选"""
-        selected = set(self.chapter_listbox.curselection())
-        for i in range(self.chapter_listbox.size()):
-            if i in selected:
-                self.chapter_listbox.selection_clear(i)
-            else:
-                self.chapter_listbox.selection_set(i)
-    
-    def export_selected(self):
-        """导出选中的章节"""
-        selected_indices = self.chapter_listbox.curselection()
-        if not selected_indices:
-            messagebox.showwarning("警告", "请至少选择一个章节")
-            return
-        
-        if not self.chapters:
-            messagebox.showwarning("警告", "未识别到章节，请先识别章节")
-            return
-        
-        self._export_chapters([self.chapters[i] for i in selected_indices])
-    
-    def export_all(self):
-        """导出所有章节"""
-        if not self.chapters:
-            messagebox.showwarning("警告", "未识别到章节，请先识别章节")
-            return
-        
-        split_mode = self.split_mode.get()
-        output_dir = filedialog.askdirectory(title="选择输出目录")
-        if not output_dir:
-            return
-        
-        output_format = self.output_format.get()
-        
-        try:
-            if split_mode == "chapter":
-                # 按章节模式
-                merge_export = self.merge_export.get()
-                if merge_export:
-                    self._export_merged(self.chapters, output_dir, output_format)
-                else:
-                    self._export_by_chapter(self.chapters, output_dir, output_format)
-            elif split_mode == "size":
-                # 按大小模式
-                size_limit = int(self.size_entry.get())
-                self._export_by_size(self.chapters, output_dir, output_format, size_limit)
-            elif split_mode == "batch":
-                # 批量合并模式
-                try:
-                    batch_count = int(self.batch_count_entry.get())
-                    if batch_count <= 0:
-                        raise ValueError
-                except ValueError:
-                    messagebox.showerror("错误", "合并章节数必须是大于0的整数")
-                    return
-                self._export_by_interval(self.chapters, output_dir, output_format, batch_count)
-            
-            if split_mode == "batch":
-                messagebox.showinfo("成功", f"已按每 {self.batch_count_entry.get()} 章合并导出完成！")
-                self.status_label.config(text="批量合并导出完成")
-            elif split_mode == "chapter" and self.merge_export.get():
-                 messagebox.showinfo("成功", f"已合并导出 {len(self.chapters)} 个章节")
-                 self.status_label.config(text=f"导出完成: 1 个合并文件")
-            else:
-                messagebox.showinfo("成功", f"已导出 {len(self.chapters)} 个章节")
-                self.status_label.config(text=f"导出完成: {len(self.chapters)} 个文件")
-        except Exception as e:
-            messagebox.showerror("错误", f"导出失败: {str(e)}")
-            self.status_label.config(text="导出失败")
-    
-    def _export_chapters(self, chapters_to_export: List[Chapter]):
-        """导出章节的内部方法 (复用于手动选中)"""
-        if not chapters_to_export:
-            return
-        
-        output_dir = filedialog.askdirectory(title="选择输出目录")
-        if not output_dir:
-            return
-        
-        split_mode = self.split_mode.get()
-        output_format = self.output_format.get()
-        
-        try:
-            # 仅当为普通章节模式且未勾选合并时，使用单独导出逻辑
-            if split_mode == "chapter":
-                self._export_by_chapter(chapters_to_export, output_dir, output_format)
-            else:
-                # 其他模式（大小、批量）建议使用“导出全部”，但如果用户坚持用选中导出
-                # 这里为了简化，强制使用单章节导出
-                messagebox.showinfo("提示", "当前模式下建议使用“导出全部”功能。\n现在将按单章节导出选中项。")
-                self._export_by_chapter(chapters_to_export, output_dir, output_format)
+            self.chapters[i].end_pos = self.chapters[i+1].start_pos if i < len(self.chapters)-1 else len(self.file_content)
+        self.refresh_chapter_list()
 
-            messagebox.showinfo("成功", f"已导出 {len(chapters_to_export)} 个章节到: {output_dir}")
-            self.status_label.config(text=f"导出完成: {len(chapters_to_export)} 个文件")
-        except Exception as e:
-            messagebox.showerror("错误", f"导出失败: {str(e)}")
-            self.status_label.config(text="导出失败")
-    
-    def _remove_title_from_content(self, content: str, title: str) -> str:
-        """从内容开头移除章节标题（如果存在）"""
-        lines = content.split('\n')
-        if not lines:
-            return content
-        
-        first_line = lines[0].strip()
-        title_stripped = title.strip()
-        
-        if first_line == title_stripped:
-            if len(lines) > 1:
-                return '\n'.join(lines[1:])
-            else:
-                return ''
-        
-        return content
-    
-    def _export_by_chapter(self, chapters: List[Chapter], output_dir: str, format_type: str):
-        """按章节导出（分别导出）"""
-        for i, chapter in enumerate(chapters, 1):
-            content = self.file_content[chapter.start_pos:chapter.end_pos]
-            
-            if format_type == "md":
-                content = self._remove_title_from_content(content, chapter.title)
-                content = f"# {chapter.title}\n\n{content}"
-                ext = ".md"
-            else:
-                ext = ".txt"
-            
-            safe_title = re.sub(r'[<>:"/\\|?*]', '_', chapter.title)
-            filename = f"{i:04d}_{safe_title}{ext}"
-            filepath = os.path.join(output_dir, filename)
-            
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(content)
-    
-    def _export_merged(self, chapters: List[Chapter], output_dir: str, format_type: str):
-        """合并导出到单个文件"""
-        merged_content = []
-        
-        for chapter in chapters:
-            chapter_content = self.file_content[chapter.start_pos:chapter.end_pos]
-            chapter_content = self._remove_title_from_content(chapter_content, chapter.title)
-            merged_content.append(f"# {chapter.title}\n\n{chapter_content}")
-        
-        final_content = "\n\n".join(merged_content)
-        
-        if format_type == "md":
-            ext = ".md"
-        else:
-            ext = ".txt"
-        
-        first_title = re.sub(r'[<>:"/\\|?*]', '_', chapters[0].title)
-        last_title = re.sub(r'[<>:"/\\|?*]', '_', chapters[-1].title)
-        filename = f"merged_{first_title}_to_{last_title}{ext}"
-        
-        if len(filename) > 200:
-            filename = f"merged_{len(chapters)}_chapters{ext}"
-        
-        filepath = os.path.join(output_dir, filename)
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(final_content)
-            
-    def _export_by_interval(self, chapters: List[Chapter], output_dir: str, format_type: str, interval: int):
-        """
-        按固定数量合并导出
-        interval: 每几章合并为一个文件
-        """
-        total_chapters = len(chapters)
-        file_index = 1
-        
-        for start_idx in range(0, total_chapters, interval):
-            # 计算结束索引（不包含）
-            end_idx = min(start_idx + interval, total_chapters)
-            
-            # 获取当前块的章节列表
-            chunk = chapters[start_idx:end_idx]
-            
-            # 准备合并内容
-            merged_content = []
-            for chapter in chunk:
-                chapter_content = self.file_content[chapter.start_pos:chapter.end_pos]
-                chapter_content = self._remove_title_from_content(chapter_content, chapter.title)
-                merged_content.append(f"# {chapter.title}\n\n{chapter_content}")
-            
-            final_content = "\n\n".join(merged_content)
-            
-            # 生成文件名
-            # 格式: Part_01_Ch1-10.txt
-            start_num = start_idx + 1
-            end_num = end_idx
-            
-            if format_type == "md":
-                ext = ".md"
-            else:
-                ext = ".txt"
-                
-            filename = f"Part_{file_index:02d}_Ch{start_num}-{end_num}{ext}"
-            filepath = os.path.join(output_dir, filename)
-            
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(final_content)
-            
-            file_index += 1
+    def refresh_chapter_list(self):
+        self.chapter_area.clear()
+        self.check_vars = []
+        for c in self.chapters:
+            var = tk.BooleanVar(value=True)
+            cb = tk.Checkbutton(self.chapter_area.scrollable_frame, text=c.title, variable=var, bg='white', anchor='w')
+            cb.pack(fill=tk.X, padx=5, pady=1)
+            self.check_vars.append(var)
 
-    def _export_by_size(self, chapters: List[Chapter], output_dir: str, format_type: str, size_limit: int):
-        """按大小分割导出"""
-        current_content = ""
-        current_size = 0
-        file_index = 1
+    def select_all(self): [v.set(True) for v in self.check_vars]
+    def select_none(self): [v.set(False) for v in self.check_vars]
+    def invert_selection(self): [v.set(not v.get()) for v in self.check_vars]
+
+    def _prepare_content(self, chapter):
+        """MD去重逻辑"""
+        raw_text = self.file_content[chapter.start_pos:chapter.end_pos].strip()
+        if self.output_ext.get() == "md":
+            lines = raw_text.split('\n')
+            if lines and lines[0].strip().lower() == chapter.title.lower():
+                body = "\n".join(lines[1:]).strip()
+            else: body = raw_text
+            return f"# {chapter.title}\n\n{body}"
+        return raw_text
+
+    def _get_filename(self, idx, title):
+        """通用单章/片段命名逻辑"""
+        safe_title = re.sub(r'[<>:"/\\|?*]', '_', title).strip()
+        parts = []
+        if self.use_file_prefix.get(): parts.append(self.file_name_stem)
+        if self.use_index_prefix.get(): parts.append(f"{idx:04d}")
+        parts.append(safe_title)
+        return "_".join(parts) + f".{self.output_ext.get()}"
+
+    def get_selected_chapters(self):
+        return [(i, self.chapters[i]) for i, v in enumerate(self.check_vars) if v.get()]
+
+    # --- 导出方法修复 ---
+
+    def export_individual(self):
+        selected = self.get_selected_chapters()
+        if not selected: return
+        out_dir = filedialog.askdirectory()
+        if not out_dir: return
+        for idx, chapter in selected:
+            content = self._prepare_content(chapter)
+            name = self._get_filename(idx+1, chapter.title)
+            with open(os.path.join(out_dir, name), 'w', encoding='utf-8') as f: f.write(content)
+        messagebox.showinfo("完成", f"已成功导出 {len(selected)} 个文件")
+
+    def export_merged_single(self):
+        """修复：合并为单档现在有默认命名和后缀"""
+        selected_data = self.get_selected_chapters()
+        if not selected_data: return
         
-        for chapter in chapters:
-            chapter_content = self.file_content[chapter.start_pos:chapter.end_pos]
-            
-            if format_type == "md":
-                chapter_content = self._remove_title_from_content(chapter_content, chapter.title)
-                chapter_title = f"# {chapter.title}\n\n"
-                chapter_text = chapter_title + chapter_content
-            else:
-                chapter_text = chapter_content
-            
-            chapter_size = len(chapter_text)
-            
-            if chapter_size > size_limit:
-                if current_content:
-                    filename = f"part_{file_index:04d}.{format_type}"
-                    filepath = os.path.join(output_dir, filename)
-                    with open(filepath, 'w', encoding='utf-8') as f:
-                        f.write(current_content)
-                    file_index += 1
-                    current_content = ""
-                    current_size = 0
-                
-                safe_title = re.sub(r'[<>:"/\\|?*]', '_', chapter.title)
-                filename = f"part_{file_index:04d}_{safe_title}.{format_type}"
-                filepath = os.path.join(output_dir, filename)
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    f.write(chapter_text)
-                file_index += 1
-            else:
-                if current_size + chapter_size > size_limit and current_content:
-                    filename = f"part_{file_index:04d}.{format_type}"
-                    filepath = os.path.join(output_dir, filename)
-                    with open(filepath, 'w', encoding='utf-8') as f:
-                        f.write(current_content)
-                    file_index += 1
-                    current_content = chapter_text
-                    current_size = chapter_size
-                else:
-                    if current_content:
-                        current_content += "\n\n" + chapter_text
-                    else:
-                        current_content = chapter_text
-                    current_size = len(current_content)
+        # 构建符合规则的默认名
+        default_name = self._get_filename(0, "合并导出").replace("_0000", "") 
         
-        if current_content:
-            filename = f"part_{file_index:04d}.{format_type}"
-            filepath = os.path.join(output_dir, filename)
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(current_content)
+        save_path = filedialog.asksaveasfilename(
+            title="保存合并文件",
+            defaultextension=f".{self.output_ext.get()}",
+            initialfile=default_name,
+            filetypes=[("文档", f"*.{self.output_ext.get()}")])
+            
+        if not save_path: return
+        with open(save_path, 'w', encoding='utf-8') as f:
+            for _, c in selected_data: 
+                f.write(self._prepare_content(c) + "\n\n---\n\n")
+        messagebox.showinfo("完成", "合并文件导出成功")
 
+    def export_by_size(self):
+        if not self.chapters: return
+        try: limit = float(self.split_size_mb.get()) * 1024 * 1024
+        except: return
+        out_dir = filedialog.askdirectory()
+        if not out_dir: return
+        curr_content, file_idx = "", 1
+        for i, c in enumerate(self.chapters):
+            text = self._prepare_content(c)
+            if len((curr_content + text).encode('utf-8')) > limit and curr_content:
+                name = self._get_filename(file_idx, f"Part{file_idx}")
+                with open(os.path.join(out_dir, name), 'w', encoding='utf-8') as f: f.write(curr_content)
+                file_idx += 1; curr_content = text
+            else: curr_content += text + "\n\n"
+        if curr_content:
+            name = self._get_filename(file_idx, f"Part{file_idx}")
+            with open(os.path.join(out_dir, name), 'w', encoding='utf-8') as f: f.write(curr_content)
+        messagebox.showinfo("完成", "按大小分割导出完成")
 
-def main():
-    """主函数"""
-    root = tk.Tk()
-    app = TXTSplitter(root)
-    root.mainloop()
-
+    def export_by_count(self):
+        """修复：批量合并命名现在包含章节范围 (1~10章) 并遵循规则"""
+        selected_data = self.get_selected_chapters()
+        if not selected_data: return
+        try: count_limit = int(self.merge_count.get())
+        except: return
+        out_dir = filedialog.askdirectory()
+        if not out_dir: return
+        
+        # 将选中的章节按设定的数量分组
+        for i in range(0, len(selected_data), count_limit):
+            batch = selected_data[i : i + count_limit]
+            # 获取这组的第一章和最后一章的实际序号（从1开始）
+            start_num = batch[0][0] + 1
+            end_num = batch[-1][0] + 1
+            
+            # 构造标题名，例如 "1~10章"
+            range_title = f"{start_num}~{end_num}章"
+            # 应用统一的命名规则
+            name = self._get_filename(i//count_limit + 1, range_title)
+            
+            with open(os.path.join(out_dir, name), 'w', encoding='utf-8') as f:
+                for _, c in batch: 
+                    f.write(self._prepare_content(c) + "\n\n")
+        messagebox.showinfo("完成", "批量合并完成")
 
 if __name__ == "__main__":
-    main()
+    root = tk.Tk()
+    TXTSplitter(root)
+    root.mainloop()
