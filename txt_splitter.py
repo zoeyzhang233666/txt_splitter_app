@@ -15,6 +15,14 @@ try:
 except ImportError:
     EBOOK_SUPPORT = False
 
+# --- 拖拽支持 (新增) ---
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    DND_SUPPORT = True
+except ImportError:
+    DND_SUPPORT = False
+    print("提示: 未安装 tkinterdnd2，拖拽功能不可用。请运行 pip install tkinterdnd2")
+
 # --- DPI 适配 ---
 try:
     from ctypes import windll
@@ -74,6 +82,11 @@ class TXTSplitter:
         self.merge_count = tk.StringVar(value="10")
         self.output_ext = tk.StringVar(value="txt")
         
+        # --- 注册拖拽 (新增) ---
+        if DND_SUPPORT:
+            self.root.drop_target_register(DND_FILES)
+            self.root.dnd_bind('<<Drop>>', self.drop_file)
+        
         self.setup_ui()
 
     def setup_ui(self):
@@ -84,7 +97,12 @@ class TXTSplitter:
         # 1. 文件加载
         f_frame = ttk.LabelFrame(main_frame, text=" 1. 文件加载 ", padding=10)
         f_frame.pack(fill=tk.X, pady=5)
-        self.file_label = ttk.Label(f_frame, text="支持格式: TXT, Epub, Mobi")
+        
+        # 修改提示文本
+        hint_text = "支持格式: TXT, Epub, Mobi"
+        if DND_SUPPORT: hint_text += " (支持文件拖入)"
+        
+        self.file_label = ttk.Label(f_frame, text=hint_text)
         self.file_label.pack(side=tk.LEFT, padx=5)
         ttk.Button(f_frame, text="打开文件", command=self.load_file).pack(side=tk.RIGHT, padx=5)
         ttk.Button(f_frame, text="识别章节", command=self.detect_chapters).pack(side=tk.RIGHT, padx=5)
@@ -134,17 +152,38 @@ class TXTSplitter:
 
     # --- 逻辑实现 ---
 
+    # 新增: 拖拽事件处理
+    def drop_file(self, event):
+        path = event.data
+        if not path: return
+        
+        # 兼容处理：Windows下拖拽如果路径有空格，会被{}包裹
+        # 使用简单的正则提取第一个文件路径
+        paths = re.findall(r'\{.*?\}|\S+', path)
+        if paths:
+            # 取第一个文件，去除可能存在的花括号
+            first_path = paths[0].strip('{}')
+            self.load_file_by_path(first_path)
+
+    # 修改: 仅保留对话框逻辑，调用 load_file_by_path
     def load_file(self):
         path = filedialog.askopenfilename(filetypes=[("支持格式", "*.txt;*.epub;*.mobi")])
         if not path: return
+        self.load_file_by_path(path)
+
+    # 新增: 核心读取逻辑（从 load_file 剥离）
+    def load_file_by_path(self, path):
         self.file_path = path
         self.file_name_stem = os.path.splitext(os.path.basename(path))[0]
         ext = os.path.splitext(path)[1].lower()
         try:
             if ext == ".txt":
-                for enc in ['utf-8-sig', 'gb18030', 'gbk']:
+                # 尝试多种编码
+                for enc in ['utf-8-sig', 'gb18030', 'gbk', 'utf-16']:
                     try:
-                        with open(path, 'r', encoding=enc) as f: self.file_content = f.read(); break
+                        with open(path, 'r', encoding=enc) as f: 
+                            self.file_content = f.read()
+                            break
                     except: continue
             elif ext == ".epub" and EBOOK_SUPPORT:
                 book = epub.read_epub(path)
@@ -153,8 +192,16 @@ class TXTSplitter:
                 _, res_path = mobi.extract(path)
                 with open(res_path, 'r', encoding='utf-8', errors='ignore') as f:
                     self.file_content = BeautifulSoup(f.read(), 'html.parser').get_text()
+            else:
+                if ext not in [".txt", ".epub", ".mobi"]:
+                    messagebox.showerror("错误", "不支持的文件格式")
+                    return
+
             self.file_label.config(text=f"已载入: {os.path.basename(path)}")
-        except Exception as e: messagebox.showerror("错误", str(e))
+            # 自动触发一次章节识别，方便用户
+            self.detect_chapters()
+            
+        except Exception as e: messagebox.showerror("错误", f"读取失败: {str(e)}")
 
     def detect_chapters(self):
         if not self.file_content: return
@@ -164,6 +211,8 @@ class TXTSplitter:
         for i in range(len(self.chapters)):
             self.chapters[i].end_pos = self.chapters[i+1].start_pos if i < len(self.chapters)-1 else len(self.file_content)
         self.refresh_chapter_list()
+        if not self.chapters:
+            messagebox.showinfo("提示", "未自动识别到章节，请确认文档格式")
 
     def refresh_chapter_list(self):
         self.chapter_area.clear()
@@ -201,7 +250,7 @@ class TXTSplitter:
     def get_selected_chapters(self):
         return [(i, self.chapters[i]) for i, v in enumerate(self.check_vars) if v.get()]
 
-    # --- 导出方法修复 ---
+    # --- 导出方法 ---
 
     def export_individual(self):
         selected = self.get_selected_chapters()
@@ -215,11 +264,9 @@ class TXTSplitter:
         messagebox.showinfo("完成", f"已成功导出 {len(selected)} 个文件")
 
     def export_merged_single(self):
-        """修复：合并为单档现在有默认命名和后缀"""
         selected_data = self.get_selected_chapters()
         if not selected_data: return
         
-        # 构建符合规则的默认名
         default_name = self._get_filename(0, "合并导出").replace("_0000", "") 
         
         save_path = filedialog.asksaveasfilename(
@@ -254,7 +301,6 @@ class TXTSplitter:
         messagebox.showinfo("完成", "按大小分割导出完成")
 
     def export_by_count(self):
-        """修复：批量合并命名现在包含章节范围 (1~10章) 并遵循规则"""
         selected_data = self.get_selected_chapters()
         if not selected_data: return
         try: count_limit = int(self.merge_count.get())
@@ -262,16 +308,12 @@ class TXTSplitter:
         out_dir = filedialog.askdirectory()
         if not out_dir: return
         
-        # 将选中的章节按设定的数量分组
         for i in range(0, len(selected_data), count_limit):
             batch = selected_data[i : i + count_limit]
-            # 获取这组的第一章和最后一章的实际序号（从1开始）
             start_num = batch[0][0] + 1
             end_num = batch[-1][0] + 1
             
-            # 构造标题名，例如 "1~10章"
             range_title = f"{start_num}~{end_num}章"
-            # 应用统一的命名规则
             name = self._get_filename(i//count_limit + 1, range_title)
             
             with open(os.path.join(out_dir, name), 'w', encoding='utf-8') as f:
@@ -280,6 +322,11 @@ class TXTSplitter:
         messagebox.showinfo("完成", "批量合并完成")
 
 if __name__ == "__main__":
-    root = tk.Tk()
+    # 如果安装了 tkinterdnd2，则使用支持拖拽的 Tk 对象
+    if DND_SUPPORT:
+        root = TkinterDnD.Tk()
+    else:
+        root = tk.Tk()
+    
     TXTSplitter(root)
     root.mainloop()
